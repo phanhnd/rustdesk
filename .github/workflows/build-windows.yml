@@ -1,34 +1,54 @@
-name: Build Windows Only
-on: [push, workflow_dispatch]
+name: Build-Windows-Exe
+on:
+  workflow_dispatch: # Cho phép bạn bấm nút chạy thủ công
 
 jobs:
-  build-windows:
+  build:
     runs-on: windows-2022
     steps:
-      - name: Checkout
+      - name: Checkout Code
         uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
-          submodules: recursive
-      
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: '3.16.x'
-          channel: 'stable'
-      
-      - name: Setup Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          target: x86_64-pc-windows-msvc
-      
-      - name: Build
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install NASM & LLVM
         run: |
-          flutter config --enable-windows-desktop
-          flutter build windows --release
-      
-      - name: Upload EXE
+          choco install nasm llvm -y
+          echo "C:\Program Files\NASM" >> $env:GITHUB_PATH
+
+      - name: Setup VCPKG
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git
+          cd vcpkg
+          ./bootstrap-vcpkg.bat
+          echo "VCPKG_ROOT=$((Get-Item .).FullName)" >> $env:GITHUB_ENV
+
+      - name: Install VCPKG Dependencies
+        run: |
+          # Cài đặt các thư viện lõi cho xử lý video/audio
+          $env:VCPKG_ROOT + "\vcpkg.exe" install libvpx:x64-windows libopus:x64-windows aom:x64-windows
+
+      - name: Download Sciter Library
+        run: |
+          # RustDesk dùng Sciter cho giao diện, cần file dll này để chạy
+          Invoke-WebRequest -Uri "https://github.com/c-smile/sciter-sdk/raw/master/bin.win/x64/sciter.dll" -OutFile "sciter.dll"
+
+      - name: Build RustDesk Binary
+        run: |
+          # Build bản chính thức (Release)
+          cargo build --release
+
+      - name: Organize Artifacts
+        run: |
+          mkdir output
+          copy target/release/rustdesk.exe output/
+          copy sciter.dll output/
+
+      - name: Upload Result
         uses: actions/upload-artifact@v4
         with:
-          name: rustdesk-windows
-          path: build/windows/runner/Release/
+          name: RustDesk-Windows-x64
+          path: output/*
