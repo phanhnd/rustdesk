@@ -1,54 +1,54 @@
-name: Build-Windows-Exe
+name: Build-Windows-2026
 on:
-  workflow_dispatch: # Cho phép bạn bấm nút chạy thủ công
+  workflow_dispatch:
+
+# Ép GitHub Actions sử dụng Node 24 để hết cảnh báo deprecation
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
-    runs-on: windows-2022
+    runs-on: windows-latest # Sử dụng bản mới nhất của GitHub
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4 # Kiểm tra nếu có v5 thì thay vào đây
 
       - name: Install Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
 
-      - name: Install NASM & LLVM
+      - name: Install Dependencies (NASM, LLVM)
         run: |
           choco install nasm llvm -y
+          # Thêm NASM vào PATH để Cargo tìm thấy
           echo "C:\Program Files\NASM" >> $env:GITHUB_PATH
 
-      - name: Setup VCPKG
+      - name: Setup VCPKG & Libraries
         run: |
           git clone https://github.com/microsoft/vcpkg.git
           cd vcpkg
           ./bootstrap-vcpkg.bat
+          ./vcpkg install libvpx:x64-windows libopus:x64-windows aom:x64-windows
           echo "VCPKG_ROOT=$((Get-Item .).FullName)" >> $env:GITHUB_ENV
 
-      - name: Install VCPKG Dependencies
+      - name: Get Sciter Library
         run: |
-          # Cài đặt các thư viện lõi cho xử lý video/audio
-          $env:VCPKG_ROOT + "\vcpkg.exe" install libvpx:x64-windows libopus:x64-windows aom:x64-windows
-
-      - name: Download Sciter Library
-        run: |
-          # RustDesk dùng Sciter cho giao diện, cần file dll này để chạy
           Invoke-WebRequest -Uri "https://github.com/c-smile/sciter-sdk/raw/master/bin.win/x64/sciter.dll" -OutFile "sciter.dll"
 
-      - name: Build RustDesk Binary
+      - name: Build Release
         run: |
-          # Build bản chính thức (Release)
+          # Build RustDesk
           cargo build --release
 
-      - name: Organize Artifacts
+      - name: Package Artifacts
         run: |
-          mkdir output
-          copy target/release/rustdesk.exe output/
-          copy sciter.dll output/
+          mkdir dist
+          copy target/release/rustdesk.exe dist/
+          copy sciter.dll dist/
 
-      - name: Upload Result
+      - name: Upload Zip
         uses: actions/upload-artifact@v4
         with:
-          name: RustDesk-Windows-x64
-          path: output/*
+          name: RustDesk-Windows-2026
+          path: dist/*
