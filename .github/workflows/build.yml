@@ -24,52 +24,51 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
 
-      - name: Rust Cache
-        uses: swatinem/rust-cache@v2
-
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.x'
           channel: 'stable'
 
-      # Cài đặt vcpkg và các thư viện cần thiết cho RustDesk
-      - name: Install vcpkg dependencies
+      - name: Install vcpkg & Set Environment
+        shell: pwsh
         run: |
           git clone https://github.com/microsoft/vcpkg
           .\vcpkg\bootstrap-vcpkg.bat
-          # RustDesk thường cần vcpkg tích hợp vào hệ thống
           .\vcpkg\vcpkg integrate install
-          # Có thể cần cài thêm các lib cụ thể nếu build.py yêu cầu
-          # .\vcpkg\vcpkg install libvpx:x64-windows libopus:x64-windows
+          # Thiết lập biến môi trường cho các bước sau
+          $vcpkgPath = "$(Get-Location)\vcpkg"
+          echo "VCPKG_ROOT=$vcpkgPath" >> $env:GITHUB_ENV
+          echo "$vcpkgPath" >> $env:GITHUB_PATH
 
-      - name: Build RustDesk
-        shell: bash # Sử dụng bash để lệnh python và path hoạt động ổn định hơn
-        run: |
-          python3 build.py
-
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
         with:
-          name: rustdesk-windows-x64
-          path: |
-            target/release/rustdesk.exe
-      # ... các bước build trước đó (Checkout, Rust, Flutter, Vcpkg, Build) ...
+          # Thêm env VCPKG_ROOT vào cache key để đảm bảo nhất quán
+          key: ${{ env.VCPKG_ROOT }}
 
       - name: Build RustDesk Binary
         shell: bash
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
         run: |
+          # Chạy script build chính thức của RustDesk
           python3 build.py
 
       - name: Create Installer (Inno Setup)
         shell: pwsh
         run: |
-          # Thường file .iss nằm trong thư mục res hoặc build của RustDesk
-          # Bạn cần kiểm tra đường dẫn chính xác trong repo của mình
-          iscc flutter/windows/installer.iss 
+          # Kiểm tra file .iss trước khi chạy, nếu không thấy sẽ báo lỗi cụ thể
+          if (Test-Path "flutter/windows/installer.iss") {
+              iscc flutter/windows/installer.iss
+          } else {
+              Write-Error "Không tìm thấy file installer.iss tại flutter/windows/"
+          }
 
-      - name: Upload Installer
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: RustDesk-Installer
-          path: flutter/windows/Output/*.exe  # Đường dẫn file cài đặt sau khi đóng gói
+          name: RustDesk-Windows-Package
+          path: |
+            target/release/rustdesk.exe
+            flutter/windows/Output/*.exe
