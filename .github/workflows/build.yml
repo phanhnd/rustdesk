@@ -1,0 +1,46 @@
+name: Build RustDesk
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Init submodules
+        run: git submodule update --init --recursive
+
+      # Rust
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # Flutter
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.19.0'
+
+      # Cache (giúp build nhanh hơn)
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build
+        run: |
+          cd flutter
+          flutter pub get
+          flutter build windows
+
+      - name: Upload file
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustdesk-windows
+          path: flutter/build/windows/x64/runner/Release/
