@@ -1,68 +1,56 @@
-name: Build RustDesk
+name: Build RustDesk Windows
 
 on:
   push:
     branches: [ "master", "main" ]
   pull_request:
     branches: [ "master", "main" ]
-  workflow_dispatch: # Cho phép chạy thủ công
+  workflow_dispatch:
 
 jobs:
   build:
-    name: Build on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-          - os: ubuntu-20.04
-            target: x86_64-unknown-linux-gnu
+    name: Build Windows x64
+    runs-on: windows-latest
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: x86_64-pc-windows-msvc
 
-      # Bước quan trọng: Cài đặt dependencies cho Linux
-      - name: Install Linux Dependencies
-        if: matrix.os == 'ubuntu-20.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y g++ gcc git curl wget nasm yasm libgtk-3-dev libxcb-randr0-dev libxdo-dev libxfixes-dev libxcb-shape0-dev libxcb-xfixes0-dev libasound2-dev libpulse-dev cmake make libclang-dev ninja-build libvcpkg-dev
-
-      # Cache các file build để tăng tốc lần sau
       - name: Rust Cache
         uses: swatinem/rust-cache@v2
 
-      # Cài đặt Flutter (vì RustDesk dùng Flutter cho UI)
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.x'
           channel: 'stable'
 
-      - name: Install vcpkg (Windows)
-        if: matrix.os == 'windows-latest'
+      # Cài đặt vcpkg và các thư viện cần thiết cho RustDesk
+      - name: Install vcpkg dependencies
         run: |
           git clone https://github.com/microsoft/vcpkg
           .\vcpkg\bootstrap-vcpkg.bat
+          # RustDesk thường cần vcpkg tích hợp vào hệ thống
+          .\vcpkg\vcpkg integrate install
+          # Có thể cần cài thêm các lib cụ thể nếu build.py yêu cầu
+          # .\vcpkg\vcpkg install libvpx:x64-windows libopus:x64-windows
 
       - name: Build RustDesk
+        shell: bash # Sử dụng bash để lệnh python và path hoạt động ổn định hơn
         run: |
-          # Lệnh build thực tế tùy thuộc vào kịch bản của bạn
-          # Thông thường sẽ chạy script build của RustDesk
-          python3 build.py 
-        
+          python3 build.py
+
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: rustdesk-${{ matrix.os }}
+          name: rustdesk-windows-x64
           path: |
             target/release/rustdesk.exe
-            target/release/rustdesk
