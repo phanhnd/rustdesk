@@ -67,7 +67,7 @@ jobs:
       # 11. Install dependencies (opus rất quan trọng)
       - name: Install vcpkg dependencies
         run: |
-          C:\vcpkg\vcpkg install opus:x64-windows
+          C:\vcpkg\vcpkg install 
 
       # 12. Flutter dependencies
       - name: Flutter pub get
