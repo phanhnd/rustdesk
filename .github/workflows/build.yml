@@ -54,3 +54,22 @@ jobs:
           name: rustdesk-windows-x64
           path: |
             target/release/rustdesk.exe
+      # ... các bước build trước đó (Checkout, Rust, Flutter, Vcpkg, Build) ...
+
+      - name: Build RustDesk Binary
+        shell: bash
+        run: |
+          python3 build.py
+
+      - name: Create Installer (Inno Setup)
+        shell: pwsh
+        run: |
+          # Thường file .iss nằm trong thư mục res hoặc build của RustDesk
+          # Bạn cần kiểm tra đường dẫn chính xác trong repo của mình
+          iscc flutter/windows/installer.iss 
+
+      - name: Upload Installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: RustDesk-Installer
+          path: flutter/windows/Output/*.exe  # Đường dẫn file cài đặt sau khi đóng gói
