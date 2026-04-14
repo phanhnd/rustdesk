@@ -1,46 +1,68 @@
 name: Build RustDesk
 
 on:
-  workflow_dispatch:
+  push:
+    branches: [ "master", "main" ]
+  pull_request:
+    branches: [ "master", "main" ]
+  workflow_dispatch: # Cho phép chạy thủ công
 
 jobs:
-  build-windows:
-    runs-on: windows-latest
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: ubuntu-20.04
+            target: x86_64-unknown-linux-gnu
 
     steps:
-      - name: Checkout source
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Init submodules
-        run: git submodule update --init --recursive
-
-      # Rust
-      - name: Install Rust
+      - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
-      # Flutter
+      # Bước quan trọng: Cài đặt dependencies cho Linux
+      - name: Install Linux Dependencies
+        if: matrix.os == 'ubuntu-20.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++ gcc git curl wget nasm yasm libgtk-3-dev libxcb-randr0-dev libxdo-dev libxfixes-dev libxcb-shape0-dev libxcb-xfixes0-dev libasound2-dev libpulse-dev cmake make libclang-dev ninja-build libvcpkg-dev
+
+      # Cache các file build để tăng tốc lần sau
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+
+      # Cài đặt Flutter (vì RustDesk dùng Flutter cho UI)
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.19.0'
+          flutter-version: '3.x'
+          channel: 'stable'
 
-      # Cache (giúp build nhanh hơn)
-      - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Build
+      - name: Install vcpkg (Windows)
+        if: matrix.os == 'windows-latest'
         run: |
-          cd flutter
-          flutter pub get
-          flutter build windows
+          git clone https://github.com/microsoft/vcpkg
+          .\vcpkg\bootstrap-vcpkg.bat
 
-      - name: Upload file
+      - name: Build RustDesk
+        run: |
+          # Lệnh build thực tế tùy thuộc vào kịch bản của bạn
+          # Thông thường sẽ chạy script build của RustDesk
+          python3 build.py 
+        
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: rustdesk-windows
-          path: flutter/build/windows/x64/runner/Release/
+          name: rustdesk-${{ matrix.os }}
+          path: |
+            target/release/rustdesk.exe
+            target/release/rustdesk
