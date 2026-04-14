@@ -2,73 +2,65 @@ name: Build RustDesk Windows
 
 on:
   push:
-    branches: [ "master", "main" ]
+    branches: [ main ]
   pull_request:
-    branches: [ "master", "main" ]
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
-  build:
-    name: Build Windows x64
+  build-windows:
     runs-on: windows-latest
 
     steps:
-      - name: Checkout code
+      # 1. Checkout source
+      - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          fetch-depth: 0
 
-      - name: Install Rust toolchain
+      # 2. Setup Rust
+      - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-msvc
 
+      # 3. Cache cargo (tăng tốc build)
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # 4. Setup Python (cho build.py + portable packer)
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      # 5. Setup Flutter
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.x'
-          channel: 'stable'
+          flutter-version: '3.22.0'
 
-      - name: Install vcpkg & Set Environment
-        shell: pwsh
+      # 6. Enable Windows build for Flutter
+      - name: Enable Windows Desktop
+        run: flutter config --enable-windows-desktop
+
+      # 7. Get dependencies Flutter
+      - name: Flutter pub get
         run: |
-          git clone https://github.com/microsoft/vcpkg
-          .\vcpkg\bootstrap-vcpkg.bat
-          .\vcpkg\vcpkg integrate install
-          # Thiết lập biến môi trường cho các bước sau
-          $vcpkgPath = "$(Get-Location)\vcpkg"
-          echo "VCPKG_ROOT=$vcpkgPath" >> $env:GITHUB_ENV
-          echo "$vcpkgPath" >> $env:GITHUB_PATH
+          cd flutter
+          flutter pub get
 
-      - name: Rust Cache
-        uses: swatinem/rust-cache@v2
-        with:
-          # Thêm env VCPKG_ROOT vào cache key để đảm bảo nhất quán
-          key: ${{ env.VCPKG_ROOT }}
-
-      - name: Build RustDesk Binary
-        shell: bash
-        env:
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+      # 8. Install Python dependencies (portable packer)
+      - name: Install Python deps
         run: |
-          # Chạy script build chính thức của RustDesk
-          python3 build.py
+          cd libs/portable
+          pip install -r requirements.txt
 
-      - name: Create Installer (Inno Setup)
-        shell: pwsh
+      # 9. Build (điểm QUAN TRỌNG)
+      - name: Build RustDesk
         run: |
-          # Kiểm tra file .iss trước khi chạy, nếu không thấy sẽ báo lỗi cụ thể
-          if (Test-Path "flutter/windows/installer.iss") {
-              iscc flutter/windows/installer.iss
-          } else {
-              Write-Error "Không tìm thấy file installer.iss tại flutter/windows/"
-          }
+          python build.py --flutter
 
-      - name: Upload Artifacts
+      # 10. Upload artifact (.exe)
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: RustDesk-Windows-Package
+          name: rustdesk-windows
           path: |
-            target/release/rustdesk.exe
-            flutter/windows/Output/*.exe
+            rustdesk-*-install.exe
