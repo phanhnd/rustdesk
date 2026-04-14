@@ -12,57 +12,84 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      # 1. Checkout source
+      # 1. Checkout source + submodules
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      # 2. Setup Rust
+      # 2. Fix submodules (tránh lỗi thiếu libs)
+      - name: Sync submodules
+        run: |
+          git submodule sync
+          git submodule update --init --recursive --force
+
+      # 3. Setup MSVC (RẤT QUAN TRỌNG cho Rust Windows)
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      # 4. Setup Rust
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # 3. Cache cargo (tăng tốc build)
+      # 5. Cache cargo
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      # 4. Setup Python (cho build.py + portable packer)
+      # 6. Setup Python
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      # 5. Setup Flutter
+      # 7. Setup Flutter (FIX Dart version lỗi trước đó)
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.41.6'
 
-      # 6. Enable Windows build for Flutter
+      # 8. Enable Windows Desktop
       - name: Enable Windows Desktop
         run: flutter config --enable-windows-desktop
 
-      # 7. Get dependencies Flutter
+      # 9. Setup VCPKG (FIX lỗi magnum-opus)
+      - name: Setup vcpkg
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
+          C:\vcpkg\bootstrap-vcpkg.bat
+
+      # 10. Set VCPKG env
+      - name: Set VCPKG environment
+        run: |
+          echo "VCPKG_ROOT=C:\vcpkg" >> $env:GITHUB_ENV
+          echo "VCPKG_DEFAULT_TRIPLET=x64-windows" >> $env:GITHUB_ENV
+
+      # 11. Install dependencies (opus rất quan trọng)
+      - name: Install vcpkg dependencies
+        run: |
+          C:\vcpkg\vcpkg install opus:x64-windows
+
+      # 12. Flutter dependencies
       - name: Flutter pub get
         run: |
           cd flutter
+          flutter clean
           flutter pub get
 
-      # 8. Install Python dependencies (portable packer)
+      # 13. Python deps (portable packer)
       - name: Install Python deps
         run: |
           cd libs/portable
           pip install -r requirements.txt
 
-      # 9. Build (điểm QUAN TRỌNG)
+      # 14. Build RustDesk (FLOW CHUẨN)
       - name: Build RustDesk
         run: |
           python build.py --flutter
 
-      # 10. Upload artifact (.exe)
+      # 15. Upload artifact
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: rustdesk-windows
-          path: |
-            rustdesk-*-install.exe
+          path: rustdesk-*-install.exe
