@@ -1,0 +1,217 @@
+name: Build RustDesk Windows 1504
+
+on:
+  workflow_dispatch:  # Cho phép chạy thủ công từ tab Actions
+
+env:
+  # Các phiên bản được fix cứng theo file gốc để đảm bảo tương thích
+  SCITER_RUST_VERSION: "1.75"
+  RUST_VERSION: "1.75"
+  LLVM_VERSION: "15.0.6"
+  FLUTTER_VERSION: "3.24.5"
+  VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
+  VERSION: "1.4.6" # Bạn có thể đổi số version tùy ý
+  # Bỏ qua ký số (sign) vì ta không có chứng chỉ
+  UPLOAD_ARTIFACT: "true"
+  SIGN_BASE_URL: "-2" # Giá trị này để bỏ qua bước sign
+
+jobs:
+  # Job 1: Sinh các file bridge (flutter_rust_bridge)
+  generate-bridge:
+    name: Generate Flutter-Rust bridge
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2.12.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+
+      - name: Install Protobuf Compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Install flutter_rust_bridge
+        run: cargo install flutter_rust_bridge_codegen --version 1.80.1
+
+      - name: Generate bridge files
+        run: |
+          cd flutter
+          flutter pub get
+          ~/.cargo/bin/flutter_rust_bridge_codegen generate
+
+      - name: Upload bridge artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bridge-artifact
+          path: |
+            flutter/lib/bridge_generated.dart
+            flutter/lib/bridge_definitions.dart
+            flutter/rust/src/bridge_generated.rs
+            flutter/rust/src/bridge_definitions.rs
+
+  # Job 2: Build công cụ TempTopMostWindow (dùng để tạo cửa sổ ảo trên Windows)
+  build-topmost:
+    name: Build RustDeskTempTopMostWindow
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build TempTopMostWindow
+        run: |
+          cd third-party/RustDeskTempTopMostWindow
+          msbuild RustDeskTempTopMostWindow.sln /p:Configuration=Release /p:Platform=x64 /p:TargetVersion=Windows10
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: topmostwindow-artifacts
+          path: third-party/RustDeskTempTopMostWindow/x64/Release/RustDeskTempTopMostWindow.exe
+
+  # Job 3: Build RustDesk chính cho Windows (Flutter)
+  build-windows:
+    name: Build Windows x64 Flutter
+    needs: [generate-bridge, build-topmost]
+    runs-on: windows-2022
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Download bridge files
+        uses: actions/download-artifact@v4
+        with:
+          name: bridge-artifact
+          path: ./  # Giải nén trực tiếp vào thư mục gốc
+
+      - name: Download TempTopMostWindow
+        uses: actions/download-artifact@v4
+        with:
+          name: topmostwindow-artifacts
+          path: ./temp_topmost
+
+      - name: Install LLVM and Clang
+        uses: KyleMayes/install-llvm-action@v1
+        with:
+          version: ${{ env.LLVM_VERSION }}
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2.12.0
+        with:
+          channel: "stable"
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+
+      # Bước này quan trọng: thay thế engine Flutter bằng bản vá của RustDesk
+      - name: Replace Flutter engine with custom engine
+        run: |
+          flutter doctor -v
+          flutter precache --windows
+          Invoke-WebRequest -Uri https://github.com/rustdesk/engine/releases/download/main/windows-x64-release.zip -OutFile windows-x64-release.zip
+          Expand-Archive -Path windows-x64-release.zip -DestinationPath windows-x64-release
+          $flutterPath = "C:/hostedtoolcache/windows/flutter/stable-${{ env.FLUTTER_VERSION }}-x64/bin/cache/artifacts/engine/windows-x64-release/"
+          Move-Item -Force windows-x64-release/* $flutterPath
+
+      - name: Patch Flutter (dropdown menu fix)
+        shell: bash
+        run: |
+          cp .github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff $(dirname $(dirname $(which flutter)))
+          cd $(dirname $(dirname $(which flutter)))
+          [[ "3.24.5" == ${{env.FLUTTER_VERSION}} ]] && git apply flutter_3.24.4_dropdown_menu_enableFilter.diff
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: ${{ env.SCITER_RUST_VERSION }}
+          targets: x86_64-pc-windows-msvc
+          components: rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: windows-2022
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgDirectory: C:\vcpkg
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          doNotCache: false
+
+      - name: Install vcpkg dependencies
+        env:
+          VCPKG_DEFAULT_HOST_TRIPLET: x64-windows-static
+        shell: bash
+        run: |
+          if ! $VCPKG_ROOT/vcpkg install --triplet x64-windows-static; then
+            find "${VCPKG_ROOT}/" -name "*.log" | while read -r log; do
+              echo "=== $log ==="; cat "$log"
+            done
+            exit 1
+          fi
+
+      - name: Build RustDesk
+        run: |
+          python ./build.py --portable --hwcodec --flutter --vram --skip-portable-pack
+          mkdir -p rustdesk
+          mv ./flutter/build/windows/x64/runner/Release/* ./rustdesk/
+          # Copy TempTopMostWindow vào thư mục output
+          cp ./temp_topmost/RustDeskTempTopMostWindow.exe ./rustdesk/
+
+          # Tải driver USB và printer (tùy chọn, nếu lỗi mạng có thể bỏ qua)
+          try {
+            Invoke-WebRequest -Uri https://github.com/rustdesk-org/rdev/releases/download/usbmmidd_v2/usbmmidd_v2.zip -OutFile usbmmidd_v2.zip
+            Expand-Archive usbmmidd_v2.zip -DestinationPath .
+            Remove-Item -Path usbmmidd_v2\Win32 -Recurse
+            Remove-Item -Path "usbmmidd_v2\deviceinstaller64.exe", "usbmmidd_v2\deviceinstaller.exe", "usbmmidd_v2\usbmmidd.bat"
+            mv -Force .\usbmmidd_v2 ./rustdesk
+          } catch { Write-Host "USB driver download failed (optional)" }
+
+          try {
+            Invoke-WebRequest -Uri https://github.com/rustdesk/hbb_common/releases/download/driver/rustdesk_printer_driver_v4-1.4.zip -OutFile rustdesk_printer_driver_v4-1.4.zip
+            Expand-Archive rustdesk_printer_driver_v4-1.4.zip -DestinationPath .
+            mkdir ./rustdesk/drivers -Force
+            mv -Force .\rustdesk_printer_driver_v4-1.4 ./rustdesk/drivers/RustDeskPrinterDriver
+          } catch { Write-Host "Printer driver download failed (optional)" }
+
+      - name: Create self-extracting executable (portable)
+        shell: bash
+        run: |
+          sed -i '/dpiAware/d' res/manifest.xml
+          pushd ./libs/portable
+          pip install -r requirements.txt
+          python ./generate.py -f ../../rustdesk/ -o . -e ../../rustdesk/rustdesk.exe
+          popd
+          mkdir -p ./output
+          mv ./target/release/rustdesk-portable-packer.exe ./output/rustdesk-${{ env.VERSION }}-x86_64.exe
+
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build MSI installer
+        run: |
+          pushd ./res/msi
+          python preprocess.py --arp -d ../../rustdesk
+          nuget restore msi.sln
+          msbuild msi.sln -p:Configuration=Release -p:Platform=x64 /p:TargetVersion=Windows10
+          mv ./Package/bin/x64/Release/en-us/Package.msi ../../output/rustdesk-${{ env.VERSION }}-x86_64.msi
+          popd
+
+      - name: Upload artifacts (Portable EXE + MSI)
+        uses: actions/upload-artifact@v4
+        with:
+          name: RustDesk-Windows-Installer
+          path: |
+            ./output/rustdesk-*.exe
+            ./output/rustdesk-*.msi
